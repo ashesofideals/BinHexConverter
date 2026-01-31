@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>BIN ⇄ HEX Converter (Auto Reload + Memory)</title>
+<style>
+    body { font-family: sans-serif; padding: 20px; }
+    .container { max-width: 600px; margin: 0 auto; }
+    .btn-group { margin: 20px 0; }
+    button { padding: 8px 16px; cursor: pointer; margin-right: 10px; }
+    #fileName { color: #555; font-weight: bold; margin-left: 10px;}
+    .info { font-size: 0.9em; color: #666; margin-top: 5px;}
+</style>
+</head>
+<body>
+
+<div class="container">
+    <h2>BIN ⇄ Intel HEX Converter</h2>
+
+    <div>
+        <button onclick="openFile()">📂 choose your file</button>
+        <span id="fileName">no file</span>
+    </div>
+    <div class="info" id="browserInfo">正在检测浏览器支持情况...</div>
+
+    <br>
+    BIN2HEX OFFSET(HEX):
+    <input id="baseAddr" value="00000000">
+    <br><br>
+
+    <div class="btn-group">
+        <button onclick="binToHex()">BIN → HEX</button>
+        <button onclick="hexToBin()">HEX → BIN</button>
+    </div>
+</div>
+
+<script>
+let fileHandle = null;
+const APP_ID = 'hex-converter-v1-work-dir'; // 唯一的ID，用于记忆文件夹
+
+// ================= IndexedDB 辅助函数 =================
+const DB_NAME = 'HexBinToolDB';
+const DB_VERSION = 1;
+const STORE_NAME = 'fileHandles';
+
+function initDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                db.createObjectStore(STORE_NAME);
+            }
+        };
+    });
+}
+
+async function saveHandle(handle) {
+    try {
+        const db = await initDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put(handle, 'lastFile');
+        console.log("文件句柄已保存");
+    } catch (e) { console.error("保存文件句柄失败", e); }
+}
+
+async function loadHandle() {
+    try {
+        const db = await initDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readonly');
+            const req = tx.objectStore(STORE_NAME).get('lastFile');
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    } catch (e) { return null; }
+}
+
+// ================= 页面加载时自动恢复文件 =================
+window.addEventListener('load', async () => {
+    const infoEl = document.getElementById('browserInfo');
+
+    if (!window.showOpenFilePicker) {
+        infoEl.innerText = "⚠️ 当前浏览器不支持 File System Access API，无法使用自动重载功能。";
+        infoEl.style.color = "red";
+        return;
+    }
+
+    // 简单的版本检测提示（Chrome 102+ 支持 id 属性）
+    const userAgent = navigator.userAgent;
+    const chromeMatch = userAgent.match(/Chrome\/(\d+)/);
+    if (chromeMatch) {
+        const version = parseInt(chromeMatch[1], 10);
+        if (version < 102) {
+            infoEl.innerHTML = `⚠️ Chrome 版本较低 (${v})，记忆文件夹功能需要 Chrome 102+。`;
+        } else {
+            infoEl.innerText = "✅ 浏览器支持记忆文件夹与自动重载";
+        }
+    }
+
+    // 尝试恢复上次文件
+    const savedHandle = await loadHandle();
+    if (savedHandle) {
+        // 检查权限是否已授予
+        let permission = await savedHandle.queryPermission({ mode: 'read' });
+
+        if (permission === 'granted') {
+            fileHandle = savedHandle;
+            document.getElementById("fileName").innerText = "已自动恢复: " + fileHandle.name;
+            console.log("自动恢复文件句柄:", fileHandle.name);
+        } else if (permission === 'prompt') {
+            // 注意：由于 load 事件不是用户手势，requestPermission 在某些浏览器可能会报错或被拦截
+            // 这里尝试请求，如果失败则不做处理，等待用户点击“选择文件”
+            try {
+                permission = await savedHandle.requestPermission({ mode: 'read' });
+                if (permission === 'granted') {
+                    fileHandle = savedHandle;
+                    document.getElementById("fileName").innerText = "已自动恢复: " + fileHandle.name;
+                }
+            } catch (e) {
+                console.log("无法在页面加载时自动请求权限，需手动选择文件。");
+            }
+        }
+    }
+});
+
+// ================= 文件选择逻辑 =================
+async function openFile() {
+    if (!window.showOpenFilePicker) {
+        alert("您的浏览器不支持 File System Access API。\n请使用最新版 Chrome 或 Edge。");
+        return;
+    }
+
+    try {
+        // 配置选项
+        const options = {
+            id: APP_ID, // 关键：通过 ID 记忆目录
+            multiple: false,
+            // 可以在这里添加 types 过滤器，例如:
+            // types: [{
+            //   description: 'Binary/Hex Files',
+            //   accept: { 'application/octet-stream': ['.bin', '.hex'] }
+            // }]
+        };
+
+        [fileHandle] = await window.showOpenFilePicker(options);
+
+        // 保存到 IndexedDB，下次刷新页面能自动加载
+        await saveHandle(fileHandle);
+
+        document.getElementById("fileName").innerText = "已选择: " + fileHandle.name;
+        console.log("文件句柄已获取并保存:", fileHandle.name);
+    } catch (err) {
+        if (err.name !== 'AbortError') {
+            console.error("打开文件错误:", err);
+            alert("打开文件失败: " + err.message);
+        }
+    }
+}
+
+// ================= BIN -> HEX =================
+async function binToHex() {
+    if (!fileHandle) {
+        alert("请先点击“选择文件”按钮");
+        return;
+    }
+
+    try {
+        const file = await fileHandle.getFile();
+        const buffer = await file.arrayBuffer();
+        let data = new Uint8Array(buffer);
+
+        console.log(`读取文件: ${file.name} (修改时间: ${new Date(file.lastModified).toLocaleTimeString()})`);
+
+        const lineSize = 16;
+        let tailByte = null;
+        let tailCount = 0;
+        for (let i = data.length - 1; i >= 0; i--) {
+            const b = data[i];
+            if (b === 0xFF || b === 0x00) {
+                if (tailByte === null) tailByte = b;
+                if (b === tailByte) tailCount++;
+                else break;
+            } else break;
+        }
+        if (tailCount >= lineSize) {
+            const linesToRemove = Math.floor(tailCount / lineSize);
+            data = data.slice(0, data.length - linesToRemove * lineSize);
+            console.log(`裁剪尾部 ${linesToRemove * lineSize} 个字节 (${linesToRemove} 行)`);
+        }
+
+        const hex = makeIntelHex(data);
+        download(hex, "output.hex", "text/plain");
+    } catch (err) {
+        alert("读取文件失败: " + err.message);
+    }
+}
+
+function makeIntelHex(data) {
+    const lineSize = 16;
+    let baseAddr = parseInt(document.getElementById("baseAddr").value || "0", 16) >>> 0;
+    let addr = baseAddr & 0xFFFF;
+    let high = baseAddr >>> 16;
+    let out = "";
+
+    out += makeExtAddrRecord(high);
+
+    for (let i = 0; i < data.length; i += lineSize) {
+        if (addr + lineSize > 0x10000) {
+            high++;
+            addr = 0;
+            out += makeExtAddrRecord(high);
+        }
+        const chunk = data.slice(i, i + lineSize);
+        const len = chunk.length;
+        let sum = len + (addr >> 8) + (addr & 0xFF);
+        let line = ":" + toHex(len,2) + toHex(addr,4) + "00";
+        chunk.forEach(b => { line += toHex(b,2); sum += b; });
+        const checksum = ((~sum + 1) & 0xFF);
+        line += toHex(checksum,2);
+        out += line + "\n";
+        addr += len;
+    }
+    out += ":00000001FF\n";
+    return out;
+}
+
+function makeExtAddrRecord(high16) {
+    const b1 = (high16 >> 8) & 0xFF;
+    const b2 = high16 & 0xFF;
+    const sum = 2 + 0 + 0 + 4 + b1 + b2;
+    const checksum = ((~sum + 1) & 0xFF);
+    return ":02000004" + toHex(b1,2) + toHex(b2,2) + toHex(checksum,2) + "\n";
+}
+
+// ================= HEX -> BIN =================
+async function hexToBin() {
+    if (!fileHandle) {
+        alert("请先点击“选择文件”按钮");
+        return;
+    }
+
+    try {
+        const file = await fileHandle.getFile();
+        const text = await file.text();
+        console.log(`读取HEX文件 (修改时间: ${new Date(file.lastModified).toLocaleTimeString()})`);
+
+        const bin = parseIntelHex(text);
+        if (!bin || bin.length === 0) {
+            console.log("HEX 文件解析失败或校验失败，未生成 BIN 文件");
+            return;
+        }
+        download(bin, "output.bin", "application/octet-stream");
+    } catch (err) {
+        alert("读取文件失败: " + err.message);
+    }
+}
+
+function parseIntelHex(text) {
+    const lines = text.trim().split(/\r?\n/);
+    let extAddr = 0;
+    let mem = new Map();
+    let minAddr = Number.MAX_SAFE_INTEGER;
+    let maxAddr = 0;
+
+    for (let lineNo = 0; lineNo < lines.length; lineNo++) {
+        const line = lines[lineNo].trim();
+        if (!line) continue;
+        if (line[0] !== ":") {
+            alert(`第 ${lineNo+1} 行格式错误（缺少冒号）`);
+            return null;
+        }
+
+        const len  = parseInt(line.substr(1,2),16);
+        const addr = parseInt(line.substr(3,4),16);
+        const type = parseInt(line.substr(7,2),16);
+        const dataStart = 9;
+        const dataEnd   = dataStart + len * 2;
+        const checksum  = parseInt(line.substr(dataEnd,2),16);
+
+        let sum = 0;
+        for (let i = 1; i < dataEnd; i += 2) sum += parseInt(line.substr(i,2),16);
+        sum &= 0xFF;
+        const calc = ((~sum + 1) & 0xFF);
+
+        if (calc !== checksum) {
+            alert(
+                `HEX校验失败!\n` +
+                `行号: ${lineNo+1}\n` +
+                `期望: 0x${checksum.toString(16)}\n` +
+                `计算: 0x${calc.toString(16)}`
+            );
+            return null;
+        }
+
+        if (type === 0x00) {
+            const base = (extAddr << 16) | addr;
+            for (let i = 0; i < len; i++) {
+                const val = parseInt(line.substr(dataStart + i*2,2),16);
+                const abs = base + i;
+                mem.set(abs, val);
+                if (abs < minAddr) minAddr = abs;
+                if (abs > maxAddr) maxAddr = abs;
+            }
+        } else if (type === 0x04) {
+            extAddr = parseInt(line.substr(9,4),16);
+        } else if (type === 0x01) break;
+    }
+
+    if (mem.size === 0) {
+        alert("HEX文件中没有有效数据记录");
+        return null;
+    }
+
+    const fill = 0xFF;
+    const size = maxAddr - minAddr + 1;
+    const out  = new Uint8Array(size);
+    out.fill(fill);
+    for (const [addr, val] of mem) out[addr - minAddr] = val;
+
+    console.log(
+        "HEX解析完成:", "0x" + minAddr.toString(16),
+        "~", "0x" + maxAddr.toString(16),
+        "Size:", size
+    );
+    return out;
+}
+
+function toHex(v, n) { return v.toString(16).toUpperCase().padStart(n,'0'); }
+
+function download(data, filename, type) {
+    const blob = data instanceof Uint8Array ? new Blob([data], {type}) : new Blob([data], {type});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+</script>
+
+</body>
+</html>
