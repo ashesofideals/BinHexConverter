@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIN ⇄ HEX Converter</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container" id="dropZone">
+    <h2>BIN ⇄ Intel HEX Converter</h2>
+
+    <div>
+        <!-- Hidden native file input -->
+        <input type="file" id="fileInput" style="display: none;">
+        <button onclick="document.getElementById('fileInput').click()">📂 Choose File</button>
+        <span id="fileName">no file</span>
+    </div>
+    
+    <!-- Drag and drop hint -->
+    <div class="drag-hint">Or drag and drop file here</div>
+
+    <br>
+    BIN2HEX OFFSET(HEX):
+    <input id="baseAddr" value="00000000">
+    <br><br>
+
+    <div class="btn-group">
+        <button onclick="binToHex()">BIN → HEX</button>
+        <button onclick="hexToBin()">HEX → BIN</button>
+    </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
+
+<!-- 在 <div class="btn-group"> ... </div> 的后面添加 -->
+<div class="footer-info">
+    <span id="appVersion"></span> | 
+    <a href="https://github.com/ashesofideals/BinHexConverter" target="_blank">GitHub</a>
+</div>
